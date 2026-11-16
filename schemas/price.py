@@ -1,5 +1,5 @@
 """
-price.created / price.updated / price.imported -> ProductLicense (and Product trial length)
+price.created / price.updated / price.imported -> ProductLicense (a trial price is a trial license: its product's trial offer)
 
 Docs: https://developer.paddle.com/webhooks/prices/price-updated
 Trials: https://developer.paddle.com/concepts/subscriptions/trials (early access, API only)
@@ -34,7 +34,7 @@ class Price(PaddleModel):
     @property
     def lifetime(self) -> Duration | None:
         """
-        -> ProductLicense lifetime (None = perpetual), and Product trial length for a trial price
+        -> ProductLicense.life_duration: the trial length for a trial price, else the license lifetime (None = perpetual)
         """
         if self.trial_period is None:
             return None

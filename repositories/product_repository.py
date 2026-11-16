@@ -2,7 +2,7 @@ from db import Database
 from db.models import ProductLicenseRow, ProductRow
 
 from psycopg import errors as pg_errors
-from sqlalchemy import cast, literal, or_, select, update
+from sqlalchemy import cast, literal, or_, select
 from sqlalchemy.dialects.postgresql import INTERVAL, insert
 from sqlalchemy.exc import IntegrityError
 
@@ -22,7 +22,7 @@ class ProductRepository(Database):
     def upsert_product(self, product: Product) -> bool:
         """
         Insert or update the Product matching a Paddle product.
-        version_id and trial_duration are left untouched on update.
+        version_id is left untouched on update.
         Stale webhooks are skipped: the row is only updated if the product's `updated_at` is not older
         than the stored one (Paddle does not guarantee delivery order, and redelivers old events).
 
@@ -63,9 +63,10 @@ class ProductRepository(Database):
     def upsert_license(self, license: Price) -> bool:
         """
         Insert or update the ProductLicense matching a Paddle price.
-        For a trial price, also sets the trial length of its Product.
+        A trial price is stored as a trial license (is_trial, life_duration = trial length):
+        AuthAPI reads its product's trial offer from it.
         activation_seats is left untouched on update.
-        Stale webhooks are skipped (see upsert_product), the Product trial length included.
+        Stale webhooks are skipped (see upsert_product).
 
         Args:
             license (Price): Paddle price
@@ -109,9 +110,4 @@ class ProductRepository(Database):
                     ProductLicenseRow.updated_at.is_(None), ProductLicenseRow.updated_at <= stmt.excluded.updated_at
                 ),
             ).returning(ProductLicenseRow.id)
-            if s.execute(stmt).scalar_one_or_none() is None:
-                return False  # stale: a newer version of this price is already stored
-
-            if license.is_trial:
-                s.execute(update(ProductRow).where(ProductRow.id == product_id).values(trial_duration=life_duration))
-            return True
+            return s.execute(stmt).scalar_one_or_none() is not None
