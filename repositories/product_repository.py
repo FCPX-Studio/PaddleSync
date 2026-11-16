@@ -1,12 +1,17 @@
 from db import Database
 from db.models import ProductLicenseRow, ProductRow
 
+from psycopg import errors as pg_errors
 from sqlalchemy import cast, literal, select, update
 from sqlalchemy.dialects.postgresql import INTERVAL, insert
+from sqlalchemy.exc import IntegrityError
 
-from repositories.errors import MissingDependency
+from schemas.exceptions import BundleIdConflictError, MissingDependencyError
 from schemas.product import Product
 from schemas.price import Price
+
+# Named by the db naming convention (uq_%(table_name)s_%(column_0_N_name)s)
+BUNDLE_ID_CONSTRAINT = "uq_Product_bundle_id"
 
 
 class ProductRepository(Database):
@@ -21,6 +26,9 @@ class ProductRepository(Database):
 
         Args:
             product (Product): Paddle product
+
+        Raises:
+            BundleIdConflictError: Another product already uses this bundle ID (permanent, not retried)
         """
         stmt = insert(ProductRow).values(
             paddle_product_id=product.id,
@@ -30,8 +38,14 @@ class ProductRepository(Database):
             index_elements=[ProductRow.paddle_product_id],
             set_={"bundle_id": stmt.excluded.bundle_id},
         )
-        with self.session() as s:
-            s.execute(stmt)
+        # Wraps the whole session: the violation can surface at commit, not only at execute
+        try:
+            with self.session() as s:
+                s.execute(stmt)
+        except IntegrityError as e:
+            if isinstance(e.orig, pg_errors.UniqueViolation) and e.orig.diag.constraint_name == BUNDLE_ID_CONSTRAINT:
+                raise BundleIdConflictError(product.id, product.custom_data.bundle_id) from e
+            raise
 
     def upsert_license(self, license: Price) -> None:
         """
@@ -43,7 +57,7 @@ class ProductRepository(Database):
             license (Price): Paddle price
 
         Raises:
-            MissingDependency: The price's product isn't synced yet
+            MissingDependencyError: The price's product isn't synced yet
         """
         # Postgres interval, e.g. '1 month': months and years have no fixed length in days
         lifetime = license.lifetime
@@ -52,7 +66,7 @@ class ProductRepository(Database):
         with self.session() as s:
             product_id = s.scalar(select(ProductRow.id).where(ProductRow.paddle_product_id == license.product_id))
             if product_id is None:
-                raise MissingDependency(f"Product {license.product_id} not found for price {license.id}")
+                raise MissingDependencyError("Product", license.product_id, "price", license.id)
 
             stmt = insert(ProductLicenseRow).values(
                 product_id=product_id,

@@ -1,6 +1,6 @@
 from logger import logger
 from handlers import HANDLERS
-from repositories import PermanentError
+from schemas.exceptions import PermanentError
 
 from events import EventConsumer, PaddleEvent, close_redis
 from events.streams import PADDLE_EVENTS
@@ -20,8 +20,8 @@ async def hot_event(event: PaddleEvent) -> None:
 
     Error policy:
     - Invalid payload (ValidationError): permanent, retrying won't help. Logged and acked.
-    - PermanentError (e.g. EmailConflict): the event conflicts with existing data. Logged and acked.
-    - Anything else (DB down, deadlock...): treated as transient and re-raised. EventConsumer
+    - PermanentError (e.g. BundleIdConflictError): the event conflicts with existing data. Logged and acked.
+    - Anything else (DB down, MissingDependencyError, EmailConflictError...): treated as transient and re-raised. EventConsumer
       logs it, retries it later, and moves it to `paddle:events:dead` after 5 attempts.
 
     Args:
@@ -35,11 +35,7 @@ async def hot_event(event: PaddleEvent) -> None:
     try:
         await handler(event)
     except ValidationError:
-        logger.exception(
-            "Invalid payload for %s %s, skipped: %s",
-            event.event_type,
-            event.paddle_event_id
-        )
+        logger.exception("Invalid payload for %s %s, skipped", event.event_type, event.paddle_event_id)
         return
     except PermanentError:
         # No payload in the log: it can hold the customer's email

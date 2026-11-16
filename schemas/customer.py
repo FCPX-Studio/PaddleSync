@@ -3,6 +3,7 @@ customer.created / customer.updated / customer.imported -> User
 
 Docs: https://developer.paddle.com/webhooks/customers/customer-updated
 """
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import AfterValidator, StringConstraints
@@ -22,6 +23,7 @@ class Customer(PaddleModel):
     email: Email
     name: str | None
     marketing_consent: bool
+    updated_at: datetime  # -> User.updated_at: older webhooks are skipped (out-of-order delivery)
 
 
 CustomerWebhook = PaddleWebhook[Customer]

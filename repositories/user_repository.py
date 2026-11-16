@@ -2,12 +2,12 @@ from db import Database
 from db.models import OrderItemRow, OrderRow, ProductLicenseRow, UserRow
 
 from psycopg import errors as pg_errors
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
-from repositories.errors import EmailConflict, MissingDependency
 from schemas.customer import Customer
+from schemas.exceptions import EmailConflictError, MissingDependencyError
 from schemas.transaction import Transaction
 
 # Named by the db naming convention (uq_%(table_name)s_%(column_0_N_name)s)
@@ -23,18 +23,21 @@ class UserRepository(Database):
         """
         Insert or update the User matching a Paddle customer.
         subscribed_at is left untouched on update.
+        Stale webhooks are skipped: the row is only updated if the customer's `updated_at` is not older
+        than the stored one (Paddle does not guarantee delivery order, and redelivers old events).
 
         Args:
             customer (Customer): Paddle customer
 
         Raises:
-            EmailConflict: Another customer already uses this email (permanent, not retried)
+            EmailConflictError: Another customer already uses this email (transient, retried)
         """
         stmt = insert(UserRow).values(
             paddle_customer_id=customer.id,
             email=customer.email,
             name=customer.name,
             marketing=customer.marketing_consent,
+            updated_at=customer.updated_at,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[UserRow.paddle_customer_id],
@@ -42,7 +45,10 @@ class UserRepository(Database):
                 "email": stmt.excluded.email,
                 "name": stmt.excluded.name,
                 "marketing": stmt.excluded.marketing,
+                "updated_at": stmt.excluded.updated_at,
             },
+            # Equal timestamps re-apply the same version (idempotent redelivery)
+            where=or_(UserRow.updated_at.is_(None), UserRow.updated_at <= stmt.excluded.updated_at),
         )
         # Wraps the whole session: the violation can surface at commit, not only at execute
         try:
@@ -50,8 +56,9 @@ class UserRepository(Database):
                 s.execute(stmt)
         except IntegrityError as e:
             if isinstance(e.orig, pg_errors.UniqueViolation) and e.orig.diag.constraint_name == EMAIL_CONSTRAINT:
-                # No email in the message: it ends up in the logs
-                raise EmailConflict(f"Email of customer {customer.id} is already used by another customer") from e
+                # from None: the chained psycopg error holds the email (DETAIL: Key (email)=...),
+                # and this error is logged on every retry
+                raise EmailConflictError(customer.id) from None
             raise
 
     def upsert_order(self, order: Transaction) -> int:
@@ -63,7 +70,7 @@ class UserRepository(Database):
             order (Transaction): Completed Paddle transaction
 
         Raises:
-            MissingDependency: The customer or one of the prices isn't synced yet
+            MissingDependencyError: The customer or one of the prices isn't synced yet
 
         Returns:
             int: Order.id
@@ -74,7 +81,7 @@ class UserRepository(Database):
         with self.session() as s:
             user_id = s.scalar(select(UserRow.id).where(UserRow.paddle_customer_id == order.customer_id))
             if user_id is None:
-                raise MissingDependency(f"User {order.customer_id} not found for transaction {order.id}")
+                raise MissingDependencyError("User", order.customer_id, "transaction", order.id)
 
             license_ids = dict(
                 s.execute(
@@ -83,11 +90,9 @@ class UserRepository(Database):
                     )
                 ).all()
             )
-            missing = sorted(price_ids - license_ids.keys())
+            missing = price_ids - license_ids.keys()
             if missing:
-                raise MissingDependency(
-                    f"ProductLicense not found for {', '.join(missing)} in transaction {order.id}"
-                )
+                raise MissingDependencyError("ProductLicense", missing, "transaction", order.id)
 
             # DO UPDATE (not DO NOTHING) so RETURNING gives the id on a retry too
             order_stmt = insert(OrderRow).values(
