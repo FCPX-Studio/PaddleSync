@@ -10,7 +10,7 @@
     "type": "standard",
     "tax_category": "standard",
     "image_url": null,
-    "custom_data": {"bundle_id": "com.fcpxstudio.myplugin"},
+    "custom_data": {"bundle_id": "com.fcpxstudio.myplugin", "version": "1.0.0"},
     "status": "active",
     "import_meta": null,
     "created_at": "2024-04-12T09:00:00.000Z",

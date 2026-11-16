@@ -46,12 +46,12 @@ def test_product():
 
 def test_product_version():
     payload = load("product.updated")
-    assert ProductWebhook.model_validate(payload).data.custom_data.version is None  # optional
+    assert ProductWebhook.model_validate(payload).data.custom_data.version == "1.0.0"
     payload["data"]["custom_data"]["version"] = " 1.2.0 "
     assert ProductWebhook.model_validate(payload).data.custom_data.version == "1.2.0"  # trimmed
 
 
-@pytest.mark.parametrize("version", ["", "   ", "x" * 33])
+@pytest.mark.parametrize("version", ["", "   ", "x" * 33, None])
 def test_product_invalid_version(version):
     payload = load("product.updated")
     payload["data"]["custom_data"]["version"] = version
@@ -59,7 +59,16 @@ def test_product_invalid_version(version):
         ProductWebhook.model_validate(payload)
 
 
-@pytest.mark.parametrize("custom_data", [None, {}, {"bundle_id": "not a bundle id"}])
+def test_product_requires_version():
+    payload = load("product.updated")
+    del payload["data"]["custom_data"]["version"]
+    with pytest.raises(ValidationError):
+        ProductWebhook.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "custom_data", [None, {}, {"version": "1.0.0"}, {"bundle_id": "not a bundle id", "version": "1.0.0"}]
+)
 def test_product_requires_bundle_id(custom_data):
     payload = load("product.updated")
     payload["data"]["custom_data"] = custom_data

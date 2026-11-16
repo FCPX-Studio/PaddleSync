@@ -26,7 +26,7 @@ class ProductRepository(Database):
         """
         Insert or update the Product matching a Paddle product.
         Its custom_data `version` becomes the current version (version_id): the ProductVersion with this
-        label is found, or created. Without `version`, version_id is left untouched.
+        label is found, or created.
         Stale webhooks are skipped: the row is only updated if the product's `updated_at` is not older
         than the stored one (Paddle does not guarantee delivery order, and redelivers old events),
         the version included.
@@ -62,8 +62,7 @@ class ProductRepository(Database):
                 product_id = s.execute(stmt).scalar_one_or_none()
                 if product_id is None:
                     return False  # stale: a newer version of this product is already stored
-                if product.custom_data.version is not None:
-                    self._set_version(s, product_id, product.custom_data.version)
+                self._set_version(s, product_id, product.custom_data.version)
                 return True
         except IntegrityError as e:
             if isinstance(e.orig, pg_errors.UniqueViolation) and e.orig.diag.constraint_name == BUNDLE_ID_CONSTRAINT:
