@@ -21,8 +21,9 @@ async def hot_event(event: PaddleEvent) -> None:
     Error policy:
     - Invalid payload (ValidationError): permanent, retrying won't help. Logged (one line, the invalid fields) and acked.
     - PermanentError (e.g. BundleIdConflictError): the event conflicts with existing data. Logged (one line) and acked.
-    - Anything else (DB down, MissingDependencyError, EmailConflictError...): treated as transient and re-raised. EventConsumer
-      logs it, retries it later, and moves it to `paddle:events:dead` after 5 attempts.
+    - Anything else is re-raised: EventConsumer retries it later and moves it to `paddle:events:dead` after
+      5 attempts. Expected waits (MissingDependencyError, EmailConflictError: events.RetryLater) are logged as
+      one WARNING line, other failures (DB down, bugs...) with their traceback.
 
     Args:
         event (PaddleEvent): Any paddle event

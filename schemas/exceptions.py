@@ -6,11 +6,14 @@ only, never customer data (emails, names): they end up in the logs.
 """
 from collections.abc import Iterable
 
+from events import RetryLater
 
-class MissingDependencyError(Exception):
+
+class MissingDependencyError(RetryLater):
     """
     A row the webhook refers to isn't in the DB yet (e.g. a transaction arrives before its
-    customer or price webhook). Transient: the event is retried later by EventConsumer.
+    customer or price webhook). Transient: the event is retried later by EventConsumer, which logs
+    it as one WARNING line (events.RetryLater), not a traceback.
     """
 
     def __init__(self, entity: str, entity_ids: str | Iterable[str], needed_by: str, needed_by_id: str) -> None:
@@ -35,11 +38,11 @@ class PermanentError(Exception):
     """
 
 
-class EmailConflictError(Exception):
+class EmailConflictError(RetryLater):
     """
     Another Paddle customer already uses this email (User.email is unique).
 
-    Transient, retried by EventConsumer: Paddle keeps emails unique, so a conflict means the DB is
+    Transient, retried by EventConsumer (one WARNING line, events.RetryLater): Paddle keeps emails unique, so a conflict means the DB is
     behind (e.g. the other customer's email change hasn't been synced yet). A conflict that
     outlives the retries ends up in `paddle:events:dead`, where it can be inspected and replayed.
     """
