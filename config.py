@@ -4,13 +4,10 @@ Application configuration
 This module exposes a singleton `settings` instance that can be imported
 throughout the project (e.g., from config import settings).
 """
-from typing import Literal
-
-from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class EventAPISettings(BaseSettings):
+class PaddleSyncAPISettings(BaseSettings):
     # Load .env
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -19,19 +16,9 @@ class EventAPISettings(BaseSettings):
     )
 
     # FastAPI application
-    APP_NAME: str = "EventAPI"
-    APP_DESCRIPTION: str = "Expose event sending and subscription endpoints to external services"
-    APP_VERSION: str = "1.0"
-
-    # Redis
-    REDIS_HOST: SecretStr
-    REDIS_PORT: SecretStr
-    REDIS_PASSWORD: SecretStr
-
-    # Paddle
-    PADDLE_ENVIRONMENT: Literal["sandbox", "production"] = "sandbox"
-    PADDLE_WEBHOOK_SECRET: SecretStr
+    APP_NAME: str = "PaddleSync"
+    APP_DESCRIPTION: str = "Bridge between Paddle events and DB. Listen, validates and update data in Postgres."
 
 
 
-settings = EventAPISettings() # type: ignore
+settings = PaddleSyncAPISettings() # type: ignore

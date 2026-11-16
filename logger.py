@@ -9,4 +9,4 @@ logging.basicConfig(
 )
 
 app_name = settings.APP_NAME.replace(' ', '')
-logger = logging.getLogger('Logger')
+logger = logging.getLogger(app_name+'Logger')
