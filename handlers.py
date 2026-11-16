@@ -7,6 +7,9 @@ One handler per Paddle entity: validate the entity, then write it to the DB.
 Handlers are async (listener awaits them) but the repositories are sync: a DB call blocks the
 event loop while it runs, which is fine since EventConsumer processes one message at a time.
 
+Each handler returns True if the event was applied, False if it was skipped on purpose (stale, not a
+purchase, nothing refunded): it then logs why, and the listener doesn't log it as processed.
+
 Errors (see listener.hot_event):
 - pydantic.ValidationError: the payload can't be used, logged and acked.
 - anything else (DB down, MissingDependencyError...): retried later by EventConsumer.
@@ -27,7 +30,8 @@ from schemas.transaction import Transaction
 
 
 
-EventHandler = Callable[[PaddleEvent], Awaitable[None]]
+# Returns True if the event was applied, False if skipped (the handler logs why)
+EventHandler = Callable[[PaddleEvent], Awaitable[bool]]
 _publisher: EventPublisher | None = None
 
 product_repository = ProductRepository()
@@ -41,51 +45,52 @@ def _get_publisher() -> EventPublisher:
     return _publisher
 
 
-def _log_stale(event: PaddleEvent, entity_id: str) -> None:
-    logger.info("Skipped stale %s %s: a newer version of %s is stored", event.event_type, event.paddle_event_id, entity_id)
+def _skipped(event: PaddleEvent, reason: str, *args: object) -> bool:
+    """Log why an event is skipped on purpose, return False (not applied)"""
+    logger.info("Skipped %s %s: " + reason, event.event_type, event.paddle_event_id, *args)
+    return False
 
 
-async def handle_product(event: PaddleEvent) -> None:
+def _applied_or_stale(event: PaddleEvent, written: bool, entity_id: str) -> bool:
+    return written or _skipped(event, "stale, a newer version of %s is stored", entity_id)
+
+
+async def handle_product(event: PaddleEvent) -> bool:
     product = Product.model_validate(event.payload)
-    if not product_repository.upsert_product(product):
-        _log_stale(event, product.id)
+    return _applied_or_stale(event, product_repository.upsert_product(product), product.id)
 
 
-async def handle_customer(event: PaddleEvent) -> None:
+async def handle_customer(event: PaddleEvent) -> bool:
     customer = Customer.model_validate(event.payload)
-    if not user_repository.upsert_user(customer):
-        _log_stale(event, customer.id)
+    return _applied_or_stale(event, user_repository.upsert_user(customer), customer.id)
 
 
-async def handle_price(event: PaddleEvent) -> None:
+async def handle_price(event: PaddleEvent) -> bool:
     price = Price.model_validate(event.payload)
-    if not product_repository.upsert_license(price):
-        _log_stale(event, price.id)
+    return _applied_or_stale(event, product_repository.upsert_license(price), price.id)
 
 
-async def handle_transaction_completed(event: PaddleEvent) -> None:
+async def handle_transaction_completed(event: PaddleEvent) -> bool:
     transaction = Transaction.model_validate(event.payload)
     if not transaction.is_purchase:
-        logger.info("Skipping transaction %s with origin %s", transaction.id, transaction.origin)
-        return
+        return _skipped(event, "transaction %s is not a purchase (origin %s)", transaction.id, transaction.origin)
 
     order_id = user_repository.upsert_order(transaction)
     # After the commit. If publishing fails the event is retried: upsert_order returns the same
     # order and the event is published again, so AuthAPI must be idempotent too (it is).
     await _get_publisher().publish(ORDERS_READY, OrderReady(order_id=order_id, paddle_order_id=transaction.id))
+    return True
 
 
-async def handle_adjustment(event: PaddleEvent) -> None:
+async def handle_adjustment(event: PaddleEvent) -> bool:
     adjustment = Adjustment.model_validate(event.payload)
     reason = adjustment.refund_reason
     item_ids = adjustment.full_item_ids
     if reason is None or not item_ids:
         # Credit, chargeback warning / reverse, pending or rejected, partial / tax-only refund...
-        logger.info(
-            "Skipping adjustment %s (%s, %s): no line item fully refunded",
-            adjustment.id, adjustment.action, adjustment.status,
+        return _skipped(
+            event, "adjustment %s (%s, %s) fully refunds no line item", adjustment.id, adjustment.action, adjustment.status
         )
-        return
 
     order_id = user_repository.mark_items_refunded(adjustment, reason, item_ids)
     # After the commit. Published again on a retry or redelivery (same items): AuthAPI revokes idempotently
@@ -98,6 +103,7 @@ async def handle_adjustment(event: PaddleEvent) -> None:
             reason=reason,
         ),
     )
+    return True
 
 
 # Paddle event type -> handler. Event types not listed here are ignored.

@@ -19,8 +19,8 @@ async def hot_event(event: PaddleEvent) -> None:
     Must be idempotent: the same event can be delivered more than once!
 
     Error policy:
-    - Invalid payload (ValidationError): permanent, retrying won't help. Logged and acked.
-    - PermanentError (e.g. BundleIdConflictError): the event conflicts with existing data. Logged and acked.
+    - Invalid payload (ValidationError): permanent, retrying won't help. Logged (one line, the invalid fields) and acked.
+    - PermanentError (e.g. BundleIdConflictError): the event conflicts with existing data. Logged (one line) and acked.
     - Anything else (DB down, MissingDependencyError, EmailConflictError...): treated as transient and re-raised. EventConsumer
       logs it, retries it later, and moves it to `paddle:events:dead` after 5 attempts.
 
@@ -32,17 +32,33 @@ async def hot_event(event: PaddleEvent) -> None:
         logger.debug("Ignoring %s %s", event.event_type, event.paddle_event_id)
         return
 
+    # Rejected events are a data problem (fix it in the Paddle dashboard), not a service failure:
+    # one WARNING line with the reason, no traceback.
     try:
-        await handler(event)
-    except ValidationError:
-        logger.exception("Invalid payload for %s %s, skipped", event.event_type, event.paddle_event_id)
+        applied = await handler(event)
+    except ValidationError as e:
+        logger.warning(
+            "Invalid payload for %s %s, skipped: %s", event.event_type, event.paddle_event_id, _validation_summary(e)
+        )
         return
-    except PermanentError:
-        # No payload in the log: it can hold the customer's email
-        logger.exception("Can't apply %s %s, skipped", event.event_type, event.paddle_event_id)
+    except PermanentError as e:
+        logger.warning("Can't apply %s %s, skipped: %s", event.event_type, event.paddle_event_id, e)
         return
 
-    logger.info("Processed %s %s", event.event_type, event.paddle_event_id)
+    # A handler that skips an event on purpose logs why itself: one line per event
+    if applied:
+        logger.info("Processed %s %s", event.event_type, event.paddle_event_id)
+
+
+def _validation_summary(error: ValidationError) -> str:
+    """
+    Field locations and messages, e.g. "custom_data.bundle_id: Field required".
+    Never the input values: they can hold customer data (email, name).
+    """
+    return "; ".join(
+        f"{'.'.join(str(part) for part in err['loc']) or 'payload'}: {err['msg']}"
+        for err in error.errors(include_input=False, include_url=False)
+    )
 
 
 async def main() -> None:
