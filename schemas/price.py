@@ -2,9 +2,11 @@
 price.created / price.updated / price.imported -> ProductLicense
 
 The license terms come from the price custom_data, set in the Paddle dashboard (unknown keys are ignored):
-- {"trial": true, "duration": 14}   trial offer of its product, 14-day trial (usually a $0 one-time price)
+- {"trial": true, "duration": 14}   trial offer of its product, 14-day trial (usually a $0 one-time price),
+                                    always 1 activation seat (a trial is bound to one machine)
 - {"duration": 365}                 paid license expiring 365 days after it is issued
-- no custom_data / no duration      perpetual paid license
+- {"seats": 3}                      paid license activatable on 3 machines (default 2)
+- no custom_data / no duration      perpetual paid license, 2 seats
 Paddle's own `trial_period` / `billing_cycle` (subscriptions) are not used: trials are anonymous per-machine
 trials started by the installer, and licenses are one-time purchases.
 
@@ -25,6 +27,8 @@ class PriceCustomData(PaddleModel):
 
     trial: bool = False  # -> ProductLicense.is_trial
     duration: Annotated[int, Field(ge=1)] | None = None  # days -> ProductLicense.life_duration
+    # -> ProductLicense.activation_seats of a paid license (a trial always has 1)
+    seats: Annotated[int, Field(ge=1)] = 2
 
     @model_validator(mode="after")
     def trial_needs_duration(self) -> "PriceCustomData":
@@ -55,6 +59,18 @@ class Price(PaddleModel):
         (None = perpetual)
         """
         return self.custom_data.duration if self.custom_data else None
+
+    @computed_field
+    @property
+    def activation_seats(self) -> int:
+        """
+        -> ProductLicense.activation_seats (copied into each UserLicense when it is issued):
+        1 for a trial (bound to a single machine: UserTrial is unique per product and machine),
+        else custom_data `seats` (default 2)
+        """
+        if self.is_trial:
+            return 1
+        return (self.custom_data or PriceCustomData()).seats
 
 
 PriceWebhook = PaddleWebhook[Price]

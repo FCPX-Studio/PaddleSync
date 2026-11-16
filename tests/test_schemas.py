@@ -152,6 +152,27 @@ def test_price_invalid_terms(custom_data):
         PriceWebhook.model_validate(price_with(custom_data))
 
 
+@pytest.mark.parametrize(
+    "custom_data, seats",
+    [
+        pytest.param(None, 2, id="no custom_data: default"),
+        pytest.param({"duration": 365}, 2, id="paid without seats: default"),
+        pytest.param({"seats": 3}, 3, id="paid with seats"),
+        pytest.param({"duration": 365, "seats": 1}, 1, id="single seat"),
+        pytest.param({"trial": True, "duration": 14}, 1, id="trial"),
+        pytest.param({"trial": True, "duration": 14, "seats": 5}, 1, id="trial ignores seats"),
+    ],
+)
+def test_price_activation_seats(custom_data, seats):
+    assert PriceWebhook.model_validate(price_with(custom_data)).data.activation_seats == seats
+
+
+@pytest.mark.parametrize("seats", [0, -1, "x", 1.5, None])
+def test_price_invalid_seats(seats):
+    with pytest.raises(ValidationError):
+        PriceWebhook.model_validate(price_with({"seats": seats}))
+
+
 def test_price_rejects_negative_amount():
     payload = load("price.updated")
     payload["data"]["unit_price"]["amount"] = "-1"

@@ -91,7 +91,8 @@ class ProductRepository(Database):
         Terms from the price custom_data: a trial price is stored as a trial license (is_trial,
         life_duration = trial length, AuthAPI reads its product's trial offer from it), a paid price with
         a duration as an expiring license, any other price as a perpetual license (life_duration NULL).
-        activation_seats is left untouched on update.
+        activation_seats comes from Paddle too (1 for a trial, custom_data `seats` else, default 2): a manual
+        DB edit is overwritten by the next price event. Licenses already issued keep their own seats.
         Stale webhooks are skipped (see upsert_product).
 
         Args:
@@ -116,6 +117,7 @@ class ProductRepository(Database):
                 paddle_price_id=license.id,
                 is_trial=license.is_trial,
                 life_duration=life_duration,
+                activation_seats=license.activation_seats,
                 price=license.unit_price.amount,
                 currency_code=license.unit_price.currency_code,
                 archived=license.status == "archived",
@@ -126,6 +128,7 @@ class ProductRepository(Database):
                 set_={
                     "is_trial": stmt.excluded.is_trial,
                     "life_duration": stmt.excluded.life_duration,
+                    "activation_seats": stmt.excluded.activation_seats,
                     "price": stmt.excluded.price,
                     "currency_code": stmt.excluded.currency_code,
                     "archived": stmt.excluded.archived,
