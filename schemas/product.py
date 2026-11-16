@@ -17,12 +17,19 @@ BundleId = Annotated[
 ]
 
 
+# Current version label, e.g. "1.2.0" (ProductVersion.label is 32 characters)
+VersionLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=32)]
+
+
 class ProductCustomData(PaddleModel):
     """
-    custom_data set on the product in the Paddle dashboard: {"bundle_id": "com.fcpxstudio.myplugin"}
+    custom_data set on the product in the Paddle dashboard:
+    {"bundle_id": "com.fcpxstudio.myplugin", "version": "1.2.0"} (version optional)
     """
 
     bundle_id: BundleId
+    # -> Product.version_id (ProductVersion found by label, or created). None leaves the current version as is
+    version: VersionLabel | None = None
 
 
 class Product(PaddleModel):

@@ -1,2 +1,2 @@
 events @ git+https://github.com/FCPX-Studio/events.git@v0.2.0
-db @ git+https://github.com/FCPX-Studio/db.git@v0.5.0
+db @ git+https://github.com/FCPX-Studio/db.git@v0.6.0

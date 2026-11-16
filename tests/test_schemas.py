@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.adjustment import Adjustment
-from schemas.base import Duration
 from schemas.customer import CustomerWebhook
 from schemas.price import PriceWebhook
 from schemas.product import ProductWebhook
@@ -45,6 +44,21 @@ def test_product():
     assert product.custom_data.bundle_id == "com.fcpxstudio.myplugin"
 
 
+def test_product_version():
+    payload = load("product.updated")
+    assert ProductWebhook.model_validate(payload).data.custom_data.version is None  # optional
+    payload["data"]["custom_data"]["version"] = " 1.2.0 "
+    assert ProductWebhook.model_validate(payload).data.custom_data.version == "1.2.0"  # trimmed
+
+
+@pytest.mark.parametrize("version", ["", "   ", "x" * 33])
+def test_product_invalid_version(version):
+    payload = load("product.updated")
+    payload["data"]["custom_data"]["version"] = version
+    with pytest.raises(ValidationError):
+        ProductWebhook.model_validate(payload)
+
+
 @pytest.mark.parametrize("custom_data", [None, {}, {"bundle_id": "not a bundle id"}])
 def test_product_requires_bundle_id(custom_data):
     payload = load("product.updated")
@@ -76,17 +90,57 @@ def test_price_one_time():
     price = PriceWebhook.model_validate(load("price.updated")).data
     assert price.unit_price.amount == 4900  # "4900" -> int cents
     assert price.unit_price.currency_code == "USD"
+    assert price.custom_data is None  # null in the fixture
     assert price.is_trial is False
-    assert price.lifetime is None  # perpetual
+    assert price.duration_days is None  # perpetual
+
+
+def price_with(custom_data) -> dict:
+    payload = load("price.updated")
+    payload["data"]["custom_data"] = custom_data
+    return payload
 
 
 def test_price_trial():
-    payload = load("price.updated")
+    price = PriceWebhook.model_validate(price_with({"trial": True, "duration": 14})).data
+    assert price.is_trial is True
+    assert price.duration_days == 14
+
+
+def test_price_paid_with_duration():
+    price = PriceWebhook.model_validate(price_with({"duration": 365})).data
+    assert price.is_trial is False
+    assert price.duration_days == 365
+
+
+@pytest.mark.parametrize("custom_data", [{}, {"other": "key"}, {"trial": False}])
+def test_price_without_terms_is_perpetual(custom_data):
+    price = PriceWebhook.model_validate(price_with(custom_data)).data
+    assert (price.is_trial, price.duration_days) == (False, None)
+
+
+def test_price_native_trial_period_is_ignored():
+    payload = price_with(None)
     payload["data"]["billing_cycle"] = {"interval": "year", "frequency": 1}
     payload["data"]["trial_period"] = {"interval": "day", "frequency": 14, "requires_payment_method": False}
     price = PriceWebhook.model_validate(payload).data
-    assert price.is_trial is True
-    assert price.lifetime == Duration(interval="day", frequency=14)
+    assert (price.is_trial, price.duration_days) == (False, None)
+
+
+@pytest.mark.parametrize(
+    "custom_data",
+    [
+        pytest.param({"trial": True}, id="trial without duration"),
+        pytest.param({"trial": True, "duration": None}, id="trial with null duration"),
+        pytest.param({"duration": 0}, id="zero days"),
+        pytest.param({"duration": -7}, id="negative"),
+        pytest.param({"duration": "two weeks"}, id="not a number"),
+        pytest.param({"duration": 1.5}, id="fractional days"),
+    ],
+)
+def test_price_invalid_terms(custom_data):
+    with pytest.raises(ValidationError):
+        PriceWebhook.model_validate(price_with(custom_data))
 
 
 def test_price_rejects_negative_amount():

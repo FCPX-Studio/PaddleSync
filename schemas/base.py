@@ -43,16 +43,6 @@ class Money(PaddleModel):
     currency_code: CurrencyCode
 
 
-class Duration(PaddleModel):
-    """
-    A Paddle period, e.g. 14 days or 1 year.
-    Kept as interval + frequency: months and years have no fixed length in days.
-    """
-
-    interval: Literal["day", "week", "month", "year"]
-    frequency: int = Field(ge=1)
-
-
 DataT = TypeVar("DataT", bound=PaddleModel)
 
 
