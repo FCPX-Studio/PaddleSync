@@ -4,6 +4,8 @@ price.created / price.updated / price.imported -> ProductLicense (and Product tr
 Docs: https://developer.paddle.com/webhooks/prices/price-updated
 Trials: https://developer.paddle.com/concepts/subscriptions/trials (early access, API only)
 """
+from datetime import datetime
+
 from pydantic import computed_field
 
 from schemas.base import Duration, Money, PaddleModel, PaddleWebhook, PriceId, ProductId, Status
@@ -19,7 +21,8 @@ class Price(PaddleModel):
     unit_price: Money  # -> ProductLicense unit price + currency
     billing_cycle: Duration | None
     trial_period: TrialPeriod | None
-    status: Status  # no column: archived prices are logged and still updated
+    status: Status  # -> ProductLicense.archived
+    updated_at: datetime  # -> ProductLicense.updated_at: older webhooks are skipped (out-of-order delivery)
 
     @computed_field
     @property

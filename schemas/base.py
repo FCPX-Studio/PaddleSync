@@ -27,6 +27,7 @@ ProductId = Annotated[str, StringConstraints(pattern=r"^pro_[a-z\d]{26}$")]
 PriceId = Annotated[str, StringConstraints(pattern=r"^pri_[a-z\d]{26}$")]
 TransactionId = Annotated[str, StringConstraints(pattern=r"^txn_[a-z\d]{26}$")]
 TransactionItemId = Annotated[str, StringConstraints(pattern=r"^txnitm_[a-z\d]{26}$")]
+AdjustmentId = Annotated[str, StringConstraints(pattern=r"^adj_[a-z\d]{26}$")]
 
 # ISO 4217 code, e.g. "USD"
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]

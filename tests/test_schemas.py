@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from schemas.adjustment import Adjustment
 from schemas.base import Duration
 from schemas.customer import CustomerWebhook
 from schemas.price import PriceWebhook
@@ -141,3 +142,101 @@ def test_transaction_rejects_duplicate_price():
     items.append(second)
     with pytest.raises(ValidationError, match="several line items"):
         TransactionWebhook.model_validate(payload)
+
+
+# --- Archived status / updated_at (stale guard) -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, webhook",
+    [
+        ("customer.updated", CustomerWebhook),
+        ("product.updated", ProductWebhook),
+        ("price.updated", PriceWebhook),
+    ],
+)
+def test_status_and_updated_at(name, webhook):
+    payload = load(name)
+    entity = webhook.model_validate(payload).data
+    assert entity.status == "active"
+    assert entity.updated_at.tzinfo is not None
+    payload["data"]["status"] = "archived"
+    assert webhook.model_validate(payload).data.status == "archived"
+
+
+@pytest.mark.parametrize("name", ["customer.updated", "product.updated", "price.updated"])
+def test_updated_at_is_required(name):
+    payload = load(name)
+    del payload["data"]["updated_at"]
+    with pytest.raises(ValidationError):
+        WEBHOOKS[name].model_validate(payload)
+
+
+WEBHOOKS = {"customer.updated": CustomerWebhook, "product.updated": ProductWebhook, "price.updated": PriceWebhook}
+
+
+# --- Adjustment -------------------------------------------------------------------------------
+# Paddle's own sample (Simulations API): a pending partial refund. Validated as the entity,
+# like handlers do (the simulated envelope has ntfsimevt_ ids).
+
+
+def adjustment_data(**overrides) -> dict:
+    data = load("adjustment.updated")["data"]
+    data.update(overrides)
+    return data
+
+
+def test_adjustment_sample_revokes_nothing():
+    adjustment = Adjustment.model_validate(adjustment_data())
+    assert adjustment.id == "adj_01hvgf2s84dr6reszzg29zbvcm"
+    assert adjustment.transaction_id == "txn_01hvcc93znj3mpqt1tenkjb04y"
+    assert adjustment.refund_reason is None  # pending_approval
+    assert adjustment.full_item_ids == []  # partial
+
+
+@pytest.mark.parametrize("action", ["refund", "chargeback"])
+def test_adjustment_approved_full_revokes(action):
+    data = adjustment_data(action=action, status="approved")
+    data["items"][0]["type"] = "full"
+    adjustment = Adjustment.model_validate(data)
+    assert adjustment.refund_reason == action
+    assert adjustment.full_item_ids == ["txnitm_01hvcc94b7qgz60qmrqmbm19zw"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"action": "credit", "status": "approved"}, id="credit"),
+        pytest.param({"action": "chargeback_reverse", "status": "approved"}, id="chargeback reverse"),
+        pytest.param({"action": "chargeback_warning", "status": "approved"}, id="chargeback warning"),
+        pytest.param({"action": "refund", "status": "rejected"}, id="rejected"),
+        pytest.param({"action": "refund", "status": "pending_approval"}, id="pending"),
+    ],
+)
+def test_adjustment_not_revoking(overrides):
+    data = adjustment_data(**overrides)
+    data["items"][0]["type"] = "full"
+    assert Adjustment.model_validate(data).refund_reason is None
+
+
+def test_adjustment_full_items_only_and_deduplicated():
+    data = adjustment_data(action="refund", status="approved")
+    full = {**data["items"][0], "type": "full", "item_id": "txnitm_01hvcc94b7qgz60qmrqmbm1aaa"}
+    tax = {**data["items"][0], "type": "tax", "item_id": "txnitm_01hvcc94b7qgz60qmrqmbm1bbb"}
+    data["items"] = [full, data["items"][0], tax, dict(full)]
+    assert Adjustment.model_validate(data).full_item_ids == ["txnitm_01hvcc94b7qgz60qmrqmbm1aaa"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda d: d.update(transaction_id="txn_123"), id="bad transaction id"),
+        pytest.param(lambda d: d.update(items=[]), id="no items"),
+        pytest.param(lambda d: d["items"][0].update(item_id="pri_01hvcc94b7qgz60qmrqmbm19zw"), id="bad item id"),
+    ],
+)
+def test_adjustment_invalid(mutate):
+    data = adjustment_data()
+    mutate(data)
+    with pytest.raises(ValidationError):
+        Adjustment.model_validate(data)

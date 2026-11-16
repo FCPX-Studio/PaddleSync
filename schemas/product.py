@@ -3,6 +3,7 @@ product.created / product.updated / product.imported -> Product
 
 Docs: https://developer.paddle.com/webhooks/products/product-updated
 """
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import StringConstraints
@@ -27,8 +28,9 @@ class ProductCustomData(PaddleModel):
 class Product(PaddleModel):
     id: ProductId  # -> Product.paddle_product_id
     name: str
-    status: Status  # no column: archived products are logged and still updated
+    status: Status  # -> Product.archived
     custom_data: ProductCustomData  # required: a product without a bundle ID can't be saved
+    updated_at: datetime  # -> Product.updated_at: older webhooks are skipped (out-of-order delivery)
 
 
 ProductWebhook = PaddleWebhook[Product]
