@@ -1,0 +1,19 @@
+{
+  "event_id": "evt_01hv8x2a9b7c6d5e4f3g2h1j0k",
+  "event_type": "product.updated",
+  "occurred_at": "2024-04-12T10:00:00.000000Z",
+  "notification_id": "ntf_01hv8x2a9b7c6d5e4f3g2h1j0k",
+  "data": {
+    "id": "pro_01gsz97mq9pa4fkyy0wqenepkz",
+    "name": "My Plugin",
+    "description": "An FxPlug plugin for Final Cut Pro",
+    "type": "standard",
+    "tax_category": "standard",
+    "image_url": null,
+    "custom_data": {"bundle_id": "com.fcpxstudio.myplugin"},
+    "status": "active",
+    "import_meta": null,
+    "created_at": "2024-04-12T09:00:00.000Z",
+    "updated_at": "2024-04-12T10:00:00.000Z"
+  }
+}

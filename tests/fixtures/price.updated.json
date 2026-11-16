@@ -1,0 +1,24 @@
+{
+  "event_id": "evt_01gks14ge726w50ch2tmaw2a1x",
+  "event_type": "price.updated",
+  "occurred_at": "2024-10-12T07:20:50.52Z",
+  "notification_id": "ntf_01ghbkd0frb9k95cnhwd1bxpvk",
+  "data": {
+    "id": "pri_01gsz8x8sawmvhz1pv30nge1ke",
+    "product_id": "pro_01gsz97mq9pa4fkyy0wqenepkz",
+    "description": "Lifetime license",
+    "type": "standard",
+    "name": "Lifetime",
+    "billing_cycle": null,
+    "trial_period": null,
+    "tax_mode": "account_setting",
+    "unit_price": {"amount": "4900", "currency_code": "USD"},
+    "unit_price_overrides": [],
+    "quantity": {"minimum": 1, "maximum": 1},
+    "status": "active",
+    "custom_data": null,
+    "import_meta": null,
+    "created_at": "2024-10-12T07:00:00.000Z",
+    "updated_at": "2024-10-12T07:20:50.000Z"
+  }
+}
