@@ -1,0 +1,94 @@
+name: Build and deploy
+
+# Every push to main builds the image, publishes it to GHCR, then restarts
+# paddlesync on the VPS (stack defined in the FCPX-Studio/deploy repo).
+#
+#   ghcr.io/fcpx-studio/paddlesync:latest      what the VPS runs (PADDLESYNC_TAG=latest)
+#   ghcr.io/fcpx-studio/paddlesync:sha-<7>     permanent, for rollbacks (PADDLESYNC_TAG=sha-abc1234)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push waits for the running deploy instead of interrupting it
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/fcpx-studio/paddlesync
+  SERVICE: paddlesync
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache between runs: only changed layers are rebuilt
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Read-only token for the private FCPX-Studio/events and db repos (requirements.txt),
+          # mounted only during pip install (see the Dockerfile)
+          secrets: |
+            git_credentials=https://x-access-token:${{ secrets.DB_REPO_TOKEN }}@github.com
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    # VPS_* are organization secrets shared by every service repo
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+    steps:
+      - name: Set up SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # Also re-runs db-migrate first (a no-op when the schema is up to date).
+      # flock: waits for any other deploy on the VPS (deploy repo, other services)
+      # to finish, so two `docker compose up` never recreate a container at once.
+      - name: Pull and restart ${{ env.SERVICE }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" "
+            set -e
+            exec 9> ~/.deploy.lock
+            flock -w 600 9
+            cd deploy
+            docker compose pull $SERVICE
+            docker compose up -d $SERVICE
+            docker image prune -f
+            docker compose ps $SERVICE
+          "
