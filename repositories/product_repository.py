@@ -4,7 +4,7 @@ from db import Database
 from db.models import ProductLicenseRow, ProductRow, ProductVersionRow
 
 from psycopg import errors as pg_errors
-from sqlalchemy import or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -22,17 +22,18 @@ class ProductRepository(Database):
     Writes the product catalog from Paddle: Product, ProductVersion and ProductLicense
     """
 
-    def upsert_product(self, product: Product) -> bool:
+    def upsert_product(self, product: Product, download_size: int | None) -> bool:
         """
-        Insert or update the Product matching a Paddle product.
+        Insert or update the Product matching a Paddle product (name, custom_data bundle_id and type).
         Its custom_data `version` becomes the current version (version_id): the ProductVersion with this
-        label is found, or created.
+        label is created, or updated with the custom_data `download` (same version, new file: no new version).
         Stale webhooks are skipped: the row is only updated if the product's `updated_at` is not older
         than the stored one (Paddle does not guarantee delivery order, and redelivers old events),
         the version included.
 
         Args:
             product (Product): Paddle product
+            download_size (int | None): Size in bytes of the custom_data `download` file, None if unknown
 
         Raises:
             BundleIdConflictError: Another product already uses this bundle ID (permanent, not retried)
@@ -43,6 +44,8 @@ class ProductRepository(Database):
         stmt = insert(ProductRow).values(
             paddle_product_id=product.id,
             bundle_id=product.custom_data.bundle_id,
+            name=product.name,
+            type=product.custom_data.type,
             archived=product.status == "archived",
             updated_at=product.updated_at,
         )
@@ -50,6 +53,8 @@ class ProductRepository(Database):
             index_elements=[ProductRow.paddle_product_id],
             set_={
                 "bundle_id": stmt.excluded.bundle_id,
+                "name": stmt.excluded.name,
+                "type": stmt.excluded.type,
                 "archived": stmt.excluded.archived,
                 "updated_at": stmt.excluded.updated_at,
             },
@@ -62,7 +67,9 @@ class ProductRepository(Database):
                 product_id = s.execute(stmt).scalar_one_or_none()
                 if product_id is None:
                     return False  # stale: a newer version of this product is already stored
-                self._set_version(s, product_id, product.custom_data.version)
+                self._set_version(
+                    s, product_id, product.custom_data.version, product.custom_data.download, download_size
+                )
                 return True
         except IntegrityError as e:
             if isinstance(e.orig, pg_errors.UniqueViolation) and e.orig.diag.constraint_name == BUNDLE_ID_CONSTRAINT:
@@ -70,24 +77,39 @@ class ProductRepository(Database):
             raise
 
     @staticmethod
-    def _set_version(s: Session, product_id: int, label: str) -> None:
+    def _set_version(
+        s: Session, product_id: int, label: str, download_path: str, download_size: int | None
+    ) -> None:
         """
-        Point the product to its version `label`, created if missing. Runs inside the caller's transaction.
-        ON CONFLICT DO NOTHING on UNIQUE (product_id, label): safe against redeliveries and concurrent events
+        Point the product to its version `label`, created if missing, else given this download.
+        Runs inside the caller's transaction. ON CONFLICT DO UPDATE on UNIQUE (product_id, label): safe against
+        redeliveries and concurrent events.
+
+        download_size: an unknown size (None) keeps the stored one while the file is the same (the HEAD
+        request failed this time), and clears it when the file changed (the old size is another file's).
         """
-        s.execute(
-            insert(ProductVersionRow)
-            .values(product_id=product_id, label=label)
-            .on_conflict_do_nothing(index_elements=[ProductVersionRow.product_id, ProductVersionRow.label])
+        stmt = insert(ProductVersionRow).values(
+            product_id=product_id, label=label, download_path=download_path, download_size=download_size
         )
-        version_id = s.scalar(
-            select(ProductVersionRow.id).where(ProductVersionRow.product_id == product_id, ProductVersionRow.label == label)
-        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ProductVersionRow.product_id, ProductVersionRow.label],
+            set_={
+                "download_path": stmt.excluded.download_path,
+                "download_size": case(
+                    (
+                        ProductVersionRow.download_path == stmt.excluded.download_path,
+                        func.coalesce(stmt.excluded.download_size, ProductVersionRow.download_size),
+                    ),
+                    else_=stmt.excluded.download_size,
+                ),
+            },
+        ).returning(ProductVersionRow.id)
+        version_id = s.execute(stmt).scalar_one()
         s.execute(update(ProductRow).where(ProductRow.id == product_id).values(version_id=version_id))
 
     def upsert_license(self, license: Price) -> bool:
         """
-        Insert or update the ProductLicense matching a Paddle price.
+        Insert or update the ProductLicense matching a Paddle price (name, description, unit price).
         Terms from the price custom_data: a trial price is stored as a trial license (is_trial,
         life_duration = trial length, AuthAPI reads its product's trial offer from it), a paid price with
         a duration as an expiring license, any other price as a perpetual license (life_duration NULL).
@@ -115,6 +137,8 @@ class ProductRepository(Database):
             stmt = insert(ProductLicenseRow).values(
                 product_id=product_id,
                 paddle_price_id=license.id,
+                name=license.name,
+                description=license.description,
                 is_trial=license.is_trial,
                 life_duration=life_duration,
                 activation_seats=license.activation_seats,
@@ -126,6 +150,8 @@ class ProductRepository(Database):
             stmt = stmt.on_conflict_do_update(
                 index_elements=[ProductLicenseRow.paddle_price_id],
                 set_={
+                    "name": stmt.excluded.name,
+                    "description": stmt.excluded.description,
                     "is_trial": stmt.excluded.is_trial,
                     "life_duration": stmt.excluded.life_duration,
                     "activation_seats": stmt.excluded.activation_seats,

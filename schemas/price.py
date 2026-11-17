@@ -10,14 +10,20 @@ The license terms come from the price custom_data, set in the Paddle dashboard (
 Paddle's own `trial_period` / `billing_cycle` (subscriptions) are not used: trials are anonymous per-machine
 trials started by the installer, and licenses are one-time purchases.
 
+The price `name` (required here, shown to customers) and `description` label the license on the website.
+
 Docs: https://developer.paddle.com/webhooks/prices/price-updated
 """
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import Field, computed_field, model_validator
+from pydantic import Field, StringConstraints, computed_field, field_validator, model_validator
 
 from schemas.base import Money, PaddleModel, PaddleWebhook, PriceId, ProductId, Status
+
+
+# ProductLicense.name is 255 characters
+PriceName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
 class PriceCustomData(PaddleModel):
@@ -40,10 +46,20 @@ class PriceCustomData(PaddleModel):
 class Price(PaddleModel):
     id: PriceId  # -> ProductLicense.paddle_price_id
     product_id: ProductId  # -> Product lookup by paddle_product_id
+    # -> ProductLicense.name: the label shown to customers (checkout, website). Optional in Paddle but
+    # required here: a price without a name is rejected and its license is not synced
+    name: PriceName
+    # -> ProductLicense.description (None when empty)
+    description: str | None = None
     unit_price: Money  # -> ProductLicense unit price + currency
     custom_data: PriceCustomData | None = None  # Paddle sends null when none is set
     status: Status  # -> ProductLicense.archived
     updated_at: datetime  # -> ProductLicense.updated_at: older webhooks are skipped (out-of-order delivery)
+
+    @field_validator("description")
+    @classmethod
+    def empty_description_is_none(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
 
     @computed_field
     @property

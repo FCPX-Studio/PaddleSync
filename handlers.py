@@ -28,6 +28,8 @@ from schemas.price import Price
 from schemas.product import Product
 from schemas.transaction import Transaction
 
+from storage import fetch_download_size
+
 
 
 # Returns True if the event was applied, False if skipped (the handler logs why)
@@ -57,7 +59,10 @@ def _applied_or_stale(event: PaddleEvent, written: bool, entity_id: str) -> bool
 
 async def handle_product(event: PaddleEvent) -> bool:
     product = Product.model_validate(event.payload)
-    return _applied_or_stale(event, product_repository.upsert_product(product), product.id)
+    # Before the DB write, never inside its transaction. On every product event, stale ones included:
+    # product events are rare, and a size missing after a failed request is filled in by the next one
+    download_size = await fetch_download_size(product.custom_data.download)
+    return _applied_or_stale(event, product_repository.upsert_product(product, download_size), product.id)
 
 
 async def handle_customer(event: PaddleEvent) -> bool:

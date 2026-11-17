@@ -76,6 +76,56 @@ def test_product_requires_bundle_id(custom_data):
         ProductWebhook.model_validate(payload)
 
 
+def test_product_catalog_fields():
+    product = ProductWebhook.model_validate(load("product.updated")).data
+    assert product.name == "My Plugin"
+    assert product.custom_data.type == "plugin"
+    assert product.custom_data.download == "myplugin/MyPlugin-1.0.0.pkg"
+
+
+@pytest.mark.parametrize("key", ["type", "download"])
+def test_product_requires_catalog_keys(key):
+    payload = load("product.updated")
+    del payload["data"]["custom_data"][key]
+    with pytest.raises(ValidationError):
+        ProductWebhook.model_validate(payload)
+
+
+@pytest.mark.parametrize("product_type", ["standard", "Plugin", "", None])
+def test_product_invalid_type(product_type):
+    payload = load("product.updated")
+    payload["data"]["custom_data"]["type"] = product_type
+    with pytest.raises(ValidationError):
+        ProductWebhook.model_validate(payload)
+
+
+@pytest.mark.parametrize("download", ["MyPlugin.pkg", "a/b/My_Plugin-1.0.pkg", " myplugin/x.pkg "])
+def test_product_valid_download(download):
+    payload = load("product.updated")
+    payload["data"]["custom_data"]["download"] = download
+    assert ProductWebhook.model_validate(payload).data.custom_data.download == download.strip()
+
+
+@pytest.mark.parametrize(
+    "download",
+    ["", "/myplugin/x.pkg", "myplugin/", "a//b.pkg", "../x.pkg", "a/../b.pkg", "./x.pkg", "a b.pkg",
+     "https://x.com/a.pkg", "a/" + "x" * 511, None],
+)
+def test_product_invalid_download(download):
+    payload = load("product.updated")
+    payload["data"]["custom_data"]["download"] = download
+    with pytest.raises(ValidationError):
+        ProductWebhook.model_validate(payload)
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 256, None])
+def test_product_invalid_name(name):
+    payload = load("product.updated")
+    payload["data"]["name"] = name
+    with pytest.raises(ValidationError):
+        ProductWebhook.model_validate(payload)
+
+
 # --- Customer ---------------------------------------------------------------------------------
 
 
@@ -102,6 +152,26 @@ def test_price_one_time():
     assert price.custom_data is None  # null in the fixture
     assert price.is_trial is False
     assert price.duration_days is None  # perpetual
+
+
+def test_price_name_and_description():
+    price = PriceWebhook.model_validate(load("price.updated")).data
+    assert (price.name, price.description) == ("Lifetime", "Lifetime license")
+
+
+@pytest.mark.parametrize("description", ["", "   ", None])
+def test_price_empty_description_is_none(description):
+    payload = load("price.updated")
+    payload["data"]["description"] = description
+    assert PriceWebhook.model_validate(payload).data.description is None
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 256, None])
+def test_price_requires_name(name):
+    payload = load("price.updated")
+    payload["data"]["name"] = name
+    with pytest.raises(ValidationError):
+        PriceWebhook.model_validate(payload)
 
 
 def price_with(custom_data) -> dict:

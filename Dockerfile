@@ -37,7 +37,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 
 # Application code (.env is excluded via .dockerignore; settings come from env_file at runtime)
-COPY config.py logger.py handlers.py listener.py ./
+COPY config.py logger.py handlers.py listener.py storage.py ./
 COPY repositories ./repositories
 COPY schemas ./schemas
 
