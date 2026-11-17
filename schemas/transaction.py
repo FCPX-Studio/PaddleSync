@@ -3,7 +3,8 @@ transaction.completed -> Order + OrderItem
 
 Docs: https://developer.paddle.com/webhooks/transactions/transaction-completed
 """
-from typing import Literal
+import re
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -51,6 +52,29 @@ class TransactionDetails(PaddleModel):
         return items
 
 
+# Order.claim_hash: SHA-256 of the claim secret, 64 lowercase hex (the db CHECK)
+CLAIM_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+
+class TransactionCustomData(PaddleModel):
+    """
+    custom_data the website sets on the checkout (Paddle.Checkout.open customData). Unknown keys are ignored
+    """
+
+    # -> Order.claim_hash: SHA-256 of a secret only the buyer's browser holds (see Order.claim_hash).
+    # Anything else (missing, not a string, malformed) becomes None: never reject a paid order over it,
+    # the order just can't be claimed on the confirmation page (keys by email)
+    claim_hash: str | None = None
+
+    @field_validator("claim_hash", mode="before")
+    @classmethod
+    def valid_or_none(cls, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        value = value.strip().lower()
+        return value if CLAIM_HASH_PATTERN.fullmatch(value) else None
+
+
 class Transaction(PaddleModel):
     id: TransactionId  # -> Order.paddle_transaction_id
     status: Literal["completed"]
@@ -58,6 +82,18 @@ class Transaction(PaddleModel):
     currency_code: CurrencyCode
     origin: str
     details: TransactionDetails
+    # Paddle sends null when none is set. Not an object (a list, a string...): ignored like a missing one
+    custom_data: TransactionCustomData | None = None
+
+    @field_validator("custom_data", mode="before")
+    @classmethod
+    def object_or_none(cls, value: Any) -> Any:
+        return value if isinstance(value, dict) else None
+
+    @property
+    def claim_hash(self) -> str | None:
+        """-> Order.claim_hash, None if the checkout set none (or an invalid one)"""
+        return self.custom_data.claim_hash if self.custom_data else None
 
     @property
     def is_purchase(self) -> bool:

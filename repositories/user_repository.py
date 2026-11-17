@@ -2,7 +2,7 @@ from db import Database
 from db.models import OrderItemRow, OrderRow, ProductLicenseRow, UserRow
 
 from psycopg import errors as pg_errors
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
@@ -69,8 +69,10 @@ class UserRepository(Database):
 
     def upsert_order(self, order: Transaction) -> int:
         """
-        Insert the Order and its OrderItems for a completed Paddle transaction.
-        Idempotent: a retry returns the existing order and does not duplicate items.
+        Insert the Order and its OrderItems for a completed Paddle transaction, with the claim hash of its
+        custom_data (Order.claim_hash).
+        Idempotent: a retry returns the existing order and does not duplicate items, and never clears a
+        stored claim hash.
 
         Args:
             order (Transaction): Completed Paddle transaction
@@ -106,12 +108,15 @@ class UserRepository(Database):
                 paddle_order_id=order.id,
                 total=order.details.totals.grand_total,
                 currency_code=order.details.totals.currency_code,
+                claim_hash=order.claim_hash,
             )
             order_stmt = order_stmt.on_conflict_do_update(
                 index_elements=[OrderRow.paddle_order_id],
                 set_={
                     "total": order_stmt.excluded.total,
                     "currency_code": order_stmt.excluded.currency_code,
+                    # A redelivery without the hash (no custom_data, or an invalid value) keeps the stored one
+                    "claim_hash": func.coalesce(order_stmt.excluded.claim_hash, OrderRow.claim_hash),
                 },
             ).returning(OrderRow.id)
             order_id = s.execute(order_stmt).scalar_one()

@@ -1,4 +1,4 @@
 httpx>=0.28,<1
 
 events @ git+https://github.com/FCPX-Studio/events.git@v0.2.1
-db @ git+https://github.com/FCPX-Studio/db.git@v0.7.1
+db @ git+https://github.com/FCPX-Studio/db.git@v0.7.2

@@ -298,6 +298,57 @@ def test_transaction_rejects_duplicate_price():
         TransactionWebhook.model_validate(payload)
 
 
+# --- Transaction claim_hash (custom_data) ------------------------------------------------------
+
+CLAIM_HASH = "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"  # sha256(b"\x00")
+
+
+def transaction_with(custom_data) -> dict:
+    payload = load("transaction.completed")
+    payload["data"]["custom_data"] = custom_data
+    return payload
+
+
+def test_transaction_claim_hash():
+    transaction = TransactionWebhook.model_validate(transaction_with({"claim_hash": CLAIM_HASH})).data
+    assert transaction.claim_hash == CLAIM_HASH
+
+
+def test_transaction_claim_hash_normalized():
+    """Surrounding spaces and uppercase hex: still the same hash (the db stores lowercase)"""
+    transaction = TransactionWebhook.model_validate(transaction_with({"claim_hash": f" {CLAIM_HASH.upper()} "})).data
+    assert transaction.claim_hash == CLAIM_HASH
+
+
+def test_transaction_claim_hash_with_other_keys():
+    payload = transaction_with({"claim_hash": CLAIM_HASH, "utm_source": "newsletter", "nested": {"a": 1}})
+    assert TransactionWebhook.model_validate(payload).data.claim_hash == CLAIM_HASH
+
+
+@pytest.mark.parametrize(
+    "custom_data",
+    [
+        pytest.param(None, id="null (the fixture)"),
+        pytest.param({}, id="empty"),
+        pytest.param({"utm_source": "newsletter"}, id="other keys only"),
+        pytest.param({"claim_hash": None}, id="null hash"),
+        pytest.param({"claim_hash": ""}, id="empty hash"),
+        pytest.param({"claim_hash": CLAIM_HASH[:-1]}, id="63 chars"),
+        pytest.param({"claim_hash": CLAIM_HASH + "0"}, id="65 chars"),
+        pytest.param({"claim_hash": "g" * 64}, id="not hex"),
+        pytest.param({"claim_hash": 12345}, id="a number"),
+        pytest.param({"claim_hash": [CLAIM_HASH]}, id="a list"),
+        pytest.param(["claim_hash", CLAIM_HASH], id="custom_data is a list"),
+        pytest.param("claim_hash", id="custom_data is a string"),
+    ],
+)
+def test_transaction_bad_claim_hash_is_dropped_not_rejected(custom_data):
+    """Never reject a paid order over its claim hash: it's None, the order is still saved"""
+    transaction = TransactionWebhook.model_validate(transaction_with(custom_data)).data
+    assert transaction.claim_hash is None
+    assert transaction.details.totals.grand_total == 10780
+
+
 # --- Archived status / updated_at (stale guard) -----------------------------------------------
 
 
