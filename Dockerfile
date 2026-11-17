@@ -32,12 +32,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
+# Interface and topic segment of the shared logger (logger package)
+ENV LOG_SERVICE=paddlesync
+
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 
 # Application code (.env is excluded via .dockerignore; settings come from env_file at runtime)
-COPY config.py logger.py handlers.py listener.py storage.py ./
+COPY config.py handlers.py listener.py storage.py ./
 COPY repositories ./repositories
 COPY schemas ./schemas
 

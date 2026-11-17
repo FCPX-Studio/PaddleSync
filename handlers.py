@@ -80,10 +80,16 @@ async def handle_transaction_completed(event: PaddleEvent) -> bool:
     if not transaction.is_purchase:
         return _skipped(event, "transaction %s is not a purchase (origin %s)", transaction.id, transaction.origin)
 
-    order_id = user_repository.upsert_order(transaction)
+    order = user_repository.upsert_order(transaction)
     # After the commit. If publishing fails the event is retried: upsert_order returns the same
     # order and the event is published again, so AuthAPI must be idempotent too (it is).
-    await _get_publisher().publish(ORDERS_READY, OrderReady(order_id=order_id, paddle_order_id=transaction.id))
+    await _get_publisher().publish(ORDERS_READY, OrderReady(order_id=order.order_id, paddle_order_id=transaction.id))
+
+    # Never fails the event: a retry would publish the order again
+    try:
+        logger.new_order(order.log)
+    except Exception:
+        logger.warning("Order log failed for %s", transaction.id)
     return True
 
 

@@ -12,7 +12,8 @@ class PaddleSyncAPISettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
+        hide_input_in_errors=True,  # never print secrets in validation errors
     )
 
     # FastAPI application

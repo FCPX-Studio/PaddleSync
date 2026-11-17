@@ -46,9 +46,10 @@ async def hot_event(event: PaddleEvent) -> None:
         logger.warning("Can't apply %s %s, skipped: %s", event.event_type, event.paddle_event_id, e)
         return
 
-    # A handler that skips an event on purpose logs why itself: one line per event
+    # A handler that skips an event on purpose logs why itself: one line per event.
+    # Only applied events are logged as events (paddle/<catalog|user|transaction>/<event_type>)
     if applied:
-        logger.info("Processed %s %s", event.event_type, event.paddle_event_id)
+        logger.paddle_event(event.event_type, event.paddle_event_id)
 
 
 def _validation_summary(error: ValidationError) -> str:

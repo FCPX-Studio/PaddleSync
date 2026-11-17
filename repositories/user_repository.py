@@ -1,5 +1,9 @@
 from db import Database
-from db.models import OrderItemRow, OrderRow, ProductLicenseRow, UserRow
+from db.models import OrderItemRow, OrderRow, ProductLicenseRow, ProductRow, UserRow
+
+from logger import OrderLine, OrderLog
+
+from typing import NamedTuple
 
 from psycopg import errors as pg_errors
 from sqlalchemy import func, or_, select, update
@@ -13,6 +17,12 @@ from schemas.transaction import Transaction
 
 # Named by the db naming convention (uq_%(table_name)s_%(column_0_N_name)s)
 EMAIL_CONSTRAINT = "uq_User_email"
+
+
+class UpsertedOrder(NamedTuple):
+    order_id: int
+    # What the new order log shows: items with their product name and type, user name, total
+    log: OrderLog
 
 
 class UserRepository(Database):
@@ -67,12 +77,14 @@ class UserRepository(Database):
                 raise EmailConflictError(customer.id) from None
             raise
 
-    def upsert_order(self, order: Transaction) -> int:
+    def upsert_order(self, order: Transaction) -> UpsertedOrder:
         """
         Insert the Order and its OrderItems for a completed Paddle transaction, with the claim hash of its
         custom_data (Order.claim_hash).
         Idempotent: a retry returns the existing order and does not duplicate items, and never clears a
         stored claim hash.
+        The user and license lookups also read what the new order log shows (user name, product name and
+        type, trial or not): no extra query.
 
         Args:
             order (Transaction): Completed Paddle transaction
@@ -81,23 +93,34 @@ class UserRepository(Database):
             MissingDependencyError: The customer or one of the prices isn't synced yet
 
         Returns:
-            int: Order.id
+            UpsertedOrder: Order.id, and the order as logged
         """
         line_items = order.details.line_items
         price_ids = {item.price_id for item in line_items}
 
         with self.session() as s:
-            user_id = s.scalar(select(UserRow.id).where(UserRow.paddle_customer_id == order.customer_id))
-            if user_id is None:
+            user = s.execute(
+                select(UserRow.id, UserRow.name).where(UserRow.paddle_customer_id == order.customer_id)
+            ).one_or_none()
+            if user is None:
                 raise MissingDependencyError("User", order.customer_id, "transaction", order.id)
+            user_id = user.id
 
-            license_ids = dict(
-                s.execute(
-                    select(ProductLicenseRow.paddle_price_id, ProductLicenseRow.id).where(
-                        ProductLicenseRow.paddle_price_id.in_(price_ids)
+            licenses = {
+                row.paddle_price_id: row
+                for row in s.execute(
+                    select(
+                        ProductLicenseRow.paddle_price_id,
+                        ProductLicenseRow.id,
+                        ProductLicenseRow.is_trial,
+                        ProductRow.name,
+                        ProductRow.type,
                     )
-                ).all()
-            )
+                    .join(ProductRow, ProductRow.id == ProductLicenseRow.product_id)
+                    .where(ProductLicenseRow.paddle_price_id.in_(price_ids))
+                )
+            }
+            license_ids = {price_id: row.id for price_id, row in licenses.items()}
             missing = price_ids - license_ids.keys()
             if missing:
                 raise MissingDependencyError("ProductLicense", missing, "transaction", order.id)
@@ -135,7 +158,22 @@ class UserRepository(Database):
             items_stmt = items_stmt.on_conflict_do_nothing(index_elements=[OrderItemRow.paddle_item_id])
             s.execute(items_stmt)
 
-            return order_id
+        log = OrderLog(
+            paddle_order_id=order.id,
+            user_name=user.name,
+            total=order.details.totals.grand_total,
+            currency=order.details.totals.currency_code,
+            items=[
+                OrderLine.from_product(
+                    licenses[item.price_id].name,
+                    licenses[item.price_id].type,
+                    licenses[item.price_id].is_trial,
+                    item.quantity,
+                )
+                for item in line_items
+            ],
+        )
+        return UpsertedOrder(order_id=order_id, log=log)
 
     def mark_items_refunded(self, adjustment: Adjustment, reason: str, item_ids: list[str]) -> int:
         """
